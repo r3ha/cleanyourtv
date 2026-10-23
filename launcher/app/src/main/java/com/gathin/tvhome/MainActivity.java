@@ -353,6 +353,20 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (cfg.restoreKeyServices) ServiceRepair.restore(this);
         settingsRevision = settingsRevision();
         applyViewInputsHandler(cfg.handleViewInputs);
+        keepAdbEnabled();
+        try {
+            getContentResolver().registerContentObserver(
+                    android.provider.Settings.Global.getUriFor(android.provider.Settings.Global.ADB_ENABLED),
+                    false,
+                    new android.database.ContentObserver(handler) {
+                        @Override
+                        public void onChange(boolean selfChange) {
+                            keepAdbEnabled();
+                        }
+                    }
+            );
+        } catch (Throwable ignored) {
+        }
         settingsKeycodes = cfg.settingsKeycodes;
         settingsKeyPanel = cfg.settingsKeyPanel;
         COLUMNS = cfg.columns;
@@ -846,6 +860,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 handler.postDelayed(this::playPetalShower, 450);
             }
         }
+        keepAdbEnabled();
+    }
+
+    private void keepAdbEnabled() {
+        if (checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            try {
+                if (android.provider.Settings.Global.getInt(getContentResolver(), android.provider.Settings.Global.ADB_ENABLED, 0) == 0) {
+                    android.provider.Settings.Global.putInt(getContentResolver(), android.provider.Settings.Global.ADB_ENABLED, 1);
+                }
+            } catch (Throwable ignored) {
+            }
+        }
     }
 
     /** Launcher settings' change count (Config.SETTINGS_REVISION_KEY); onResume rebuilds Home when it moved. */
@@ -1114,7 +1140,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 && event.getKeyCode() == KeyEvent.KEYCODE_MENU) {
             int position = focusedTilePosition();
             if (position >= 0 && position < adapter.appCount()
-                    && !getPackageName().equals(adapter.packageAt(position))) {
+                    && (adapter.isInputAt(position) || !getPackageName().equals(adapter.packageAt(position)))) {
                 if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) {
                     onTileLongPress(position, getCurrentFocus());
                 }
@@ -1446,6 +1472,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         });
         openPopup = appLibrary.popup;
         appLibrary.show();
+    }
+
+    @Override
+    public void onInputRequested(String inputId) {
+        openInput(inputId);
     }
 
     @Override
@@ -2575,6 +2606,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (v.equals("-")) return -1;
             try { return Integer.parseInt(v); } catch (NumberFormatException e) { return null; }
         }
+        if (hw.startsWith("HW")) {
+            try {
+                int n = Integer.parseInt(hw.substring(2));
+                if (n >= 5 && n <= 10) return n + 18;
+                if (n == 2) return 2;
+            } catch (NumberFormatException ignored) {
+            }
+        }
         return null;
     }
 
@@ -2588,10 +2627,22 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
      *  throws SecurityException, which used to take Home down with it (YaOS before the manifest asked
      *  for ACCESS_TV_SOURCE). */
     private void openInput(String inputId) {
-        Integer source = mappedSource(inputId);
-        if (source != null && source >= 0 && !inputAction.isEmpty()) {
+        TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
+        if (tim != null) {
             try {
-                startActivity(new Intent(inputAction).putExtra("input", source.intValue())
+                TvInputInfo info = tim.getTvInputInfo(inputId);
+                if (info != null && info.getParentId() != null) {
+                    inputId = info.getParentId();
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        Integer source = mappedSource(inputId);
+        if (source != null && source >= 0) {
+            String act = !inputAction.isEmpty() ? inputAction : "com.xiaomi.mitv.tvplayer.EXTSRC_PLAY";
+            try {
+                startActivity(new Intent(act).putExtra("input", source.intValue())
+                        .setPackage("com.xiaomi.mitv.tvplayer")
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
                 return;
             } catch (ActivityNotFoundException | SecurityException e) {
@@ -2905,8 +2956,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (reordering) return;
         String key = adapter.keyAt(position);
         String pkg = adapter.packageAt(position);
+        boolean isInput = adapter.isInputAt(position);
         // Empty dock slots and the Default-home tile carry the launcher's own package: no menu for them.
-        if (key == null || pkg == null || pkg.equals(getPackageName())) return;
+        if (key == null || pkg == null || (!isInput && pkg.equals(getPackageName()))) return;
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
         LinearLayout rows = panel.findViewById(R.id.rows);
         PopupWindow popup = glassPopup(panel, (int) (200 * density));
@@ -2923,11 +2975,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             pickUp(at);
             Toast.makeText(this, R.string.reorder_hint, Toast.LENGTH_LONG).show();
         });
-        if (appLibraryEnabled) addSettingsMenuRow(rows, popup, R.string.library_remove_shortcut, () -> {
+        if (!isInput && appLibraryEnabled) addSettingsMenuRow(rows, popup, R.string.library_remove_shortcut, () -> {
             if (LibraryApps.save(this, pkg, false)) reloadApps(false);
             else Toast.makeText(this, R.string.library_save_failed, Toast.LENGTH_LONG).show();
         });
-        addSettingsMenuRow(rows, popup, R.string.library_app_info, () -> open(new Intent(
+        if (!isInput) addSettingsMenuRow(rows, popup, R.string.library_app_info, () -> open(new Intent(
                 Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + pkg))));
         panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
         popup.setWidth(Math.max((int) (200 * density), panel.getMeasuredWidth()));
