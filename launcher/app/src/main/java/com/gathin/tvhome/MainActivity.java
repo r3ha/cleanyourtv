@@ -606,7 +606,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         btnInputs = findViewById(R.id.btnInputs);
         View btnSettings = findViewById(R.id.btnSettings);
         btnInputs.setOnClickListener(v -> showInputs());
-        btnWifi.setOnClickListener(v -> openNetworkPill());
+        btnWifi.setOnClickListener(v -> showWifiPopup());
         btnWifi.setOnLongClickListener(v -> {
             open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
             return true;
@@ -2947,6 +2947,126 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             action.run();
         });
         rows.addView(row);
+    }
+
+    /** Dropdown menu under the Wi-Fi pill: current network (SSID/Ethernet, status dot), IP address, and settings row. */
+    private void showWifiPopup() {
+        View anchor = findViewById(R.id.btnWifi);
+        if (anchor == null || anchor.getVisibility() != View.VISIBLE) return;
+        View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        LinearLayout rows = panel.findViewById(R.id.rows);
+
+        int width = Math.max(anchor.getWidth(), (int) (180 * density));
+        final PopupWindow popup = glassPopup(panel, width);
+
+        String networkName = getString(R.string.wifi);
+        boolean online = false;
+        boolean ethernet = false;
+        boolean wifi = false;
+        int icon = R.drawable.ic_wifi;
+
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            for (Network net : cm != null ? cm.getAllNetworks() : new Network[0]) {
+                NetworkCapabilities caps = cm.getNetworkCapabilities(net);
+                if (caps == null) continue;
+                if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) continue;
+                online = true;
+                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) ethernet = true;
+                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) wifi = true;
+            }
+            if (ethernet) {
+                networkName = getString(R.string.ethernet);
+                icon = R.drawable.ic_ethernet;
+            } else if (wifi) {
+                WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                WifiInfo info = wm != null ? wm.getConnectionInfo() : null;
+                String ssid = info != null ? info.getSSID() : null;
+                if (ssid != null) {
+                    ssid = ssid.replace("\"", "").trim();
+                    if (!ssid.isEmpty() && !ssid.contains("unknown") && !ssid.equals("0x")) {
+                        networkName = ssid;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+
+        CharSequence cached = wifiIconOnly ? btnWifi.getContentDescription() : btnWifi.getText();
+        if (!TextUtils.isEmpty(cached) && !cached.toString().contains("unknown")
+                && !cached.toString().equals(getString(R.string.wifi))
+                && !cached.toString().equals(getString(R.string.offline))) {
+            networkName = cached.toString();
+        }
+
+        String ip = getLocalIpAddress();
+        if (ip != null) online = true;
+        if (!online) networkName = getString(R.string.offline);
+
+        // Row 1: Current network name & connection status
+        int state = online ? TvInputManager.INPUT_STATE_CONNECTED : TvInputManager.INPUT_STATE_DISCONNECTED;
+        addInputRow(rows, popup, icon, networkName, state, () -> open(systemIntent(Settings.ACTION_WIFI_SETTINGS)));
+
+        // Row 2: Local IP address (if connected)
+        if (ip != null) {
+            View ipRow = getLayoutInflater().inflate(R.layout.item_input, rows, false);
+            ((ImageView) ipRow.findViewById(R.id.icon)).setImageResource(R.drawable.ic_ethernet);
+            ((TextView) ipRow.findViewById(R.id.title)).setText(ip);
+            ipRow.findViewById(R.id.dot).setVisibility(View.GONE);
+            TextView status = ipRow.findViewById(R.id.status);
+            status.setText("IPv4");
+            status.setVisibility(View.VISIBLE);
+            ipRow.setOnClickListener(v -> popup.dismiss());
+            rows.addView(ipRow);
+        }
+
+        addSeparator(rows);
+
+        // Row 3: Network settings shortcut
+        View settingsRow = getLayoutInflater().inflate(R.layout.item_input, rows, false);
+        ((ImageView) settingsRow.findViewById(R.id.icon)).setImageResource(R.drawable.ic_settings);
+        ((TextView) settingsRow.findViewById(R.id.title)).setText(R.string.quick_network);
+        settingsRow.findViewById(R.id.dot).setVisibility(View.GONE);
+        settingsRow.findViewById(R.id.status).setVisibility(View.GONE);
+        settingsRow.setOnClickListener(v -> {
+            popup.dismiss();
+            open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
+        });
+        rows.addView(settingsRow);
+
+        panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        popup.setWidth(Math.max(width, Math.min(panel.getMeasuredWidth(), (int) (360 * density))));
+
+        int alignment = getResources().getBoolean(R.bool.rtl_menu_bar) ? Gravity.START : Gravity.END;
+        dropIn(popup, panel, anchor, alignment);
+        rows.getChildAt(0).requestFocus();
+    }
+
+    private String getLocalIpAddress() {
+        try {
+            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wm != null) {
+                WifiInfo info = wm.getConnectionInfo();
+                if (info != null && info.getIpAddress() != 0) {
+                    return android.text.format.Formatter.formatIpAddress(info.getIpAddress());
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            for (java.util.Enumeration<java.net.NetworkInterface> en = java.net.NetworkInterface.getNetworkInterfaces(); en != null && en.hasMoreElements();) {
+                java.net.NetworkInterface intf = en.nextElement();
+                if (intf.isLoopback() || !intf.isUp()) continue;
+                for (java.util.Enumeration<java.net.InetAddress> enumIpAddr = intf.getInetAddresses(); enumIpAddr.hasMoreElements();) {
+                    java.net.InetAddress inetAddress = enumIpAddr.nextElement();
+                    if (!inetAddress.isLoopbackAddress() && inetAddress instanceof java.net.Inet4Address) {
+                        return inetAddress.getHostAddress();
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
     }
 
     // ---- launcher settings and module cards -------------------------------------------------------

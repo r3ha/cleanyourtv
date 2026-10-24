@@ -31,6 +31,7 @@
     <string name="good_night">晚安</string>
     <string name="ethernet">有线网络</string>
     <string name="offline">未连接网络</string>
+    <string name="quick_network">网络设置</string>
     <string name="not_available">此电视不支持该功能</string>
     <string name="cant_open">无法打开 %1$s</string>
     <string name="date_format">M月d日 EEEE</string>
